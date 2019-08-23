@@ -37,6 +37,8 @@
 #include <cstddef>
 #include <iosfwd>
 #include <limits>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <optional>
 #include <type_traits>
@@ -53,6 +55,29 @@
 #if !defined(MAGIC_ENUM_RANGE_MAX)
 #  define MAGIC_ENUM_RANGE_MAX 128
 #endif
+
+//TODO: move to namespace (requires changes) or merge with magic_enum::name_impl
+template<typename T>
+constexpr auto type_name() {
+// https://stackoverflow.com/a/56766138/2615118
+  std::string_view name, prefix, suffix;
+#if defined(__clang__)
+  name = __PRETTY_FUNCTION__;
+  prefix = "auto type_name() [T = ";
+  suffix = "]";
+#elif defined(__GNUC__)
+  name = __PRETTY_FUNCTION__;
+  prefix = "constexpr auto type_name() [with T = ";
+  suffix = "]";
+#elif defined(_MSC_VER)
+  name = __FUNCSIG__;
+  prefix = "auto __cdecl type_name<";
+  suffix = ">(void)";
+#endif
+  name.remove_prefix(prefix.size());
+  name.remove_suffix(suffix.size());
+  return name;
+}
 
 namespace magic_enum {
 
@@ -122,6 +147,15 @@ inline constexpr auto range_v = range_impl<E>();
   return {}; // Invalid name.
 }
 
+template<class T>
+struct always_false : std::false_type {};
+
+template<class T>
+constexpr std::string_view enum_name_fallback(T) {
+  static_assert(always_false<T>{}, "UNSUPPORTED COMPILER WITHOUT FALLBACK");
+  return {};
+}
+
 template <typename E, E V>
 [[nodiscard]] constexpr std::string_view name_impl() noexcept {
   static_assert(std::is_enum_v<E>, "magic_enum::detail::name_impl requires enum type.");
@@ -132,7 +166,7 @@ template <typename E, E V>
 #elif defined(_MSC_VER)
   return pretty_name({__FUNCSIG__, sizeof(__FUNCSIG__) - 17});
 #else
-  return {}; // Unsupported compiler.
+  return enum_name_fallback(std::integral_constant<E, V>{}); // Unsupported compiler.
 #endif
 }
 
@@ -458,6 +492,42 @@ constexpr E& operator^=(E& lhs, E rhs) {
 }
 
 } // namespace magic_enum::bitwise_operators
+
+template<class E>
+std::string generate_enum_fallbacks() {
+  constexpr auto entries = enum_entries<E>();
+
+//TODO: get rid of std::stringstream and std::string
+  std::stringstream buf{};
+
+//TODO: detect namespace from type_name<E> and wrap the output in that namespace
+
+//TODO: modern compilers should pick up the output of this function in order to
+// `static_assert` that the generated fallback code is consistent
+
+  buf << "// Mark this enum as fallback-enabled.\n"
+      << "// This overload prevents a compile-time error.\n"
+      << "template<" << type_name<E>() << " V> "
+      << "constexpr std::string_view enum_name_fallback(\n"
+      << "  std::integral_constant<\n"
+      << "    " << type_name<E>() << ", V\n"
+      << "  >\n"
+      << ") { return {}; }\n"
+      << "\n";
+
+  buf << "// Provide better overloads for all known enums values.\n";
+  for(auto&& e : entries) {
+    buf << "constexpr std::string_view enum_name_fallback("
+	<< "std::integral_constant<"
+	<< type_name<E>() << ", "
+	<< type_name<E>() << "::" << e.second
+	<< ">) { return \"" << e.second << "\"; }"
+	<< "\n";
+  }
+
+  return buf.str();
+}
+
 
 } // namespace magic_enum
 
